@@ -68,6 +68,15 @@ export default function Home() {
         <p className="text-emerald-100 text-sm mt-1">Scan a receipt and divide it instantly</p>
       </div>
 
+      {/* Koala mascot */}
+      <div className="flex items-end gap-3 px-6 pt-5 pb-1">
+        <div className="text-6xl leading-none select-none">🐨</div>
+        <div className="relative bg-white border border-gray-200 rounded-2xl rounded-bl-none px-4 py-2.5 shadow-sm mb-1">
+          <p className="text-sm font-medium text-gray-700">hi Vivvy pie! 🩷</p>
+          <div className="absolute -bottom-2 left-0 w-3 h-3 bg-white border-b border-l border-gray-200 rotate-[-45deg] translate-x-1" />
+        </div>
+      </div>
+
       <div className="flex-1 p-4 space-y-4">
         {error && (
           <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-sm text-red-700">
