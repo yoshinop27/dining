@@ -9,45 +9,73 @@ function uid() {
   return Math.random().toString(36).slice(2, 9)
 }
 
-function formatMoney(n: number) {
+function fmt(n: number) {
   return '$' + n.toFixed(2)
 }
 
-function calcPersonTotals(items: ReceiptItem[], people: Person[], tax: number, tip: number) {
-  const assignedSubtotal = items.reduce((sum, item) => {
-    return item.assignedTo.length > 0 ? sum + item.price : sum
-  }, 0)
+function calcPersonTotals(
+  items: ReceiptItem[],
+  people: Person[],
+  tax: number,
+  tip: number,
+  tipPercent: number,
+) {
+  const assignedSubtotal = items.reduce(
+    (sum, item) => (item.assignedTo.length > 0 ? sum + item.price : sum),
+    0,
+  )
 
   return people.map(person => {
     const itemShare = items.reduce((sum, item) => {
-      if (item.assignedTo.includes(person.id)) {
-        return sum + item.price / item.assignedTo.length
-      }
+      if (item.assignedTo.includes(person.id)) return sum + item.price / item.assignedTo.length
       return sum
     }, 0)
     const fraction = assignedSubtotal > 0 ? itemShare / assignedSubtotal : 0
-    return {
-      person,
-      itemShare,
-      total: itemShare + fraction * (tax + tip),
-    }
+    const taxShare = fraction * tax
+    const tipShare = fraction * tip
+    return { person, itemShare, taxShare, tipShare, tipPercent, total: itemShare + taxShare + tipShare }
   })
+}
+
+function buildSmsBody(
+  person: Person,
+  assignedItems: { name: string; price: number; splits: number }[],
+  taxShare: number,
+  tipShare: number,
+  tipPercent: number,
+  total: number,
+  restaurant: string | null,
+) {
+  const lines = [
+    `Hi ${person.name}! Here's your share of the bill${restaurant ? ` at ${restaurant}` : ''}:`,
+    '',
+    ...assignedItems.map(
+      i => `${i.name}${i.splits > 1 ? ` (1/${i.splits})` : ''}: ${fmt(i.price)}`,
+    ),
+    '',
+    `Tax: ${fmt(taxShare)}`,
+    `Tip (${tipPercent}%): ${fmt(tipShare)}`,
+    `Total: ${fmt(total)}`,
+  ]
+  return lines.join('\n')
 }
 
 // ── Assign sheet ──────────────────────────────────────────────────────────────
 
 function AssignSheet({
-  item,
+  itemCount,
+  initialAssigned,
   people,
   onDone,
   onClose,
 }: {
-  item: ReceiptItem
+  itemCount: number
+  initialAssigned: string[]
   people: Person[]
   onDone: (assignedTo: string[]) => void
   onClose: () => void
 }) {
-  const [selected, setSelected] = useState<string[]>(item.assignedTo)
+  const [selected, setSelected] = useState<string[]>(initialAssigned)
 
   const toggle = (id: string) =>
     setSelected(prev => (prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]))
@@ -64,13 +92,10 @@ function AssignSheet({
       >
         <div className="px-5 pt-5 pb-3 border-b border-gray-100">
           <div className="w-10 h-1 bg-gray-200 rounded-full mx-auto mb-4" />
-          <div className="flex items-start justify-between">
-            <div>
-              <p className="text-xs text-gray-400 uppercase tracking-wide font-semibold">Assign item</p>
-              <p className="font-semibold text-gray-900 mt-0.5">{item.name}</p>
-            </div>
-            <p className="font-semibold text-gray-900">{formatMoney(item.price)}</p>
-          </div>
+          <p className="text-xs text-gray-400 uppercase tracking-wide font-semibold">Assign</p>
+          <p className="font-semibold text-gray-900 mt-0.5">
+            {itemCount === 1 ? '1 item' : `${itemCount} items`}
+          </p>
         </div>
 
         <div className="flex-1 overflow-y-auto">
@@ -83,15 +108,9 @@ function AssignSheet({
                 onClick={toggleAll}
               >
                 <span className="text-sm font-medium text-gray-700">
-                  {allSelected ? 'Deselect all' : 'Select all (split evenly)'}
+                  {allSelected ? 'Deselect all' : 'Split evenly between everyone'}
                 </span>
-                <div
-                  className={`w-5 h-5 rounded border-2 flex items-center justify-center ${
-                    allSelected ? 'bg-emerald-500 border-emerald-500' : 'border-gray-300'
-                  }`}
-                >
-                  {allSelected && <span className="text-white text-xs">✓</span>}
-                </div>
+                <Checkbox checked={allSelected} />
               </button>
               {people.map(person => {
                 const on = selected.includes(person.id)
@@ -101,20 +120,12 @@ function AssignSheet({
                     className="w-full px-5 py-4 flex items-center gap-3 border-b border-gray-50 active:bg-gray-50"
                     onClick={() => toggle(person.id)}
                   >
-                    <div className="w-9 h-9 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-700 font-semibold text-sm flex-shrink-0">
-                      {person.name.charAt(0).toUpperCase()}
-                    </div>
+                    <Avatar name={person.name} />
                     <div className="flex-1 text-left">
                       <p className="text-sm font-medium text-gray-900">{person.name}</p>
                       {person.phone && <p className="text-xs text-gray-400">{person.phone}</p>}
                     </div>
-                    <div
-                      className={`w-5 h-5 rounded border-2 flex items-center justify-center flex-shrink-0 ${
-                        on ? 'bg-emerald-500 border-emerald-500' : 'border-gray-300'
-                      }`}
-                    >
-                      {on && <span className="text-white text-xs">✓</span>}
-                    </div>
+                    <Checkbox checked={on} />
                   </button>
                 )
               })}
@@ -127,7 +138,9 @@ function AssignSheet({
             onClick={() => onDone(selected)}
             className="w-full bg-emerald-600 text-white rounded-2xl py-4 font-semibold text-base active:bg-emerald-700"
           >
-            Done {selected.length > 0 && `· Split ${selected.length} way${selected.length > 1 ? 's' : ''}`}
+            Done
+            {selected.length > 1 && ` · split ${selected.length} ways`}
+            {selected.length === 1 && ` · 1 person`}
           </button>
         </div>
       </div>
@@ -135,22 +148,36 @@ function AssignSheet({
   )
 }
 
+// ── Reusable small components ─────────────────────────────────────────────────
+
+function Avatar({ name }: { name: string }) {
+  return (
+    <div className="w-9 h-9 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-700 font-semibold text-sm flex-shrink-0">
+      {name.charAt(0).toUpperCase()}
+    </div>
+  )
+}
+
+function Checkbox({ checked }: { checked: boolean }) {
+  return (
+    <div
+      className={`w-5 h-5 rounded border-2 flex items-center justify-center flex-shrink-0 ${
+        checked ? 'bg-emerald-500 border-emerald-500' : 'border-gray-300'
+      }`}
+    >
+      {checked && <span className="text-white text-xs leading-none">✓</span>}
+    </div>
+  )
+}
+
 // ── Add Person modal ──────────────────────────────────────────────────────────
 
-function AddPersonModal({
-  onAdd,
-  onClose,
-}: {
-  onAdd: (person: Person) => void
-  onClose: () => void
-}) {
+function AddPersonModal({ onAdd, onClose }: { onAdd: (p: Person) => void; onClose: () => void }) {
   const [name, setName] = useState('')
   const [phone, setPhone] = useState('')
   const nameRef = useRef<HTMLInputElement>(null)
 
-  useEffect(() => {
-    nameRef.current?.focus()
-  }, [])
+  useEffect(() => { nameRef.current?.focus() }, [])
 
   const submit = () => {
     const trimmed = name.trim()
@@ -160,42 +187,34 @@ function AddPersonModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col justify-end" onClick={onClose}>
-      <div className="absolute inset-0 bg-black/40" />
-      <div
-        className="relative bg-white rounded-t-3xl p-5"
-        onClick={e => e.stopPropagation()}
-      >
-        <div className="w-10 h-1 bg-gray-200 rounded-full mx-auto mb-5" />
-        <h3 className="font-semibold text-gray-900 mb-4">Add Person</h3>
-        <div className="space-y-3 mb-5">
-          <input
-            ref={nameRef}
-            type="text"
-            placeholder="Name"
-            value={name}
-            onChange={e => setName(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && submit()}
-            className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-emerald-400"
-          />
-          <input
-            type="tel"
-            placeholder="Phone number (optional)"
-            value={phone}
-            onChange={e => setPhone(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && submit()}
-            className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-emerald-400"
-          />
-        </div>
-        <button
-          onClick={submit}
-          disabled={!name.trim()}
-          className="w-full bg-emerald-600 text-white rounded-2xl py-4 font-semibold disabled:opacity-40"
-        >
-          Add
-        </button>
+    <BottomSheet onClose={onClose} title="Add Person">
+      <div className="space-y-3 mb-5">
+        <input
+          ref={nameRef}
+          type="text"
+          placeholder="Name"
+          value={name}
+          onChange={e => setName(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && submit()}
+          className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-emerald-400"
+        />
+        <input
+          type="tel"
+          placeholder="Phone number (optional)"
+          value={phone}
+          onChange={e => setPhone(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && submit()}
+          className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-emerald-400"
+        />
       </div>
-    </div>
+      <button
+        onClick={submit}
+        disabled={!name.trim()}
+        className="w-full bg-emerald-600 text-white rounded-2xl py-4 font-semibold disabled:opacity-40"
+      >
+        Add
+      </button>
+    </BottomSheet>
   )
 }
 
@@ -213,45 +232,31 @@ function SaveGroupModal({
   const [name, setName] = useState('')
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col justify-end" onClick={onClose}>
-      <div className="absolute inset-0 bg-black/40" />
-      <div
-        className="relative bg-white rounded-t-3xl p-5"
-        onClick={e => e.stopPropagation()}
+    <BottomSheet onClose={onClose} title="Save Group">
+      <p className="text-sm text-gray-400 mb-4">{people.map(p => p.name).join(', ')}</p>
+      <input
+        type="text"
+        placeholder="Group name (e.g. Work Crew)"
+        value={name}
+        onChange={e => setName(e.target.value)}
+        autoFocus
+        onKeyDown={e => e.key === 'Enter' && name.trim() && onSave(name.trim())}
+        className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-emerald-400 mb-4"
+      />
+      <button
+        onClick={() => name.trim() && onSave(name.trim())}
+        disabled={!name.trim()}
+        className="w-full bg-emerald-600 text-white rounded-2xl py-4 font-semibold disabled:opacity-40"
       >
-        <div className="w-10 h-1 bg-gray-200 rounded-full mx-auto mb-5" />
-        <h3 className="font-semibold text-gray-900 mb-1">Save Group</h3>
-        <p className="text-sm text-gray-400 mb-4">{people.map(p => p.name).join(', ')}</p>
-        <input
-          type="text"
-          placeholder="Group name (e.g. Work Crew)"
-          value={name}
-          onChange={e => setName(e.target.value)}
-          autoFocus
-          onKeyDown={e => e.key === 'Enter' && name.trim() && onSave(name.trim())}
-          className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-emerald-400 mb-4"
-        />
-        <button
-          onClick={() => name.trim() && onSave(name.trim())}
-          disabled={!name.trim()}
-          className="w-full bg-emerald-600 text-white rounded-2xl py-4 font-semibold disabled:opacity-40"
-        >
-          Save
-        </button>
-      </div>
-    </div>
+        Save
+      </button>
+    </BottomSheet>
   )
 }
 
-// ── Load group modal ──────────────────────────────────────────────────────────
+// ── Load Group modal ──────────────────────────────────────────────────────────
 
-function LoadGroupModal({
-  onLoad,
-  onClose,
-}: {
-  onLoad: (group: Group) => void
-  onClose: () => void
-}) {
+function LoadGroupModal({ onLoad, onClose }: { onLoad: (g: Group) => void; onClose: () => void }) {
   const groups = getSavedGroups()
 
   return (
@@ -288,7 +293,143 @@ function LoadGroupModal({
   )
 }
 
-// ── Main split page ───────────────────────────────────────────────────────────
+// ── Shared bottom sheet wrapper ───────────────────────────────────────────────
+
+function BottomSheet({
+  title,
+  onClose,
+  children,
+}: {
+  title: string
+  onClose: () => void
+  children: React.ReactNode
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex flex-col justify-end" onClick={onClose}>
+      <div className="absolute inset-0 bg-black/40" />
+      <div
+        className="relative bg-white rounded-t-3xl p-5"
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="w-10 h-1 bg-gray-200 rounded-full mx-auto mb-5" />
+        <h3 className="font-semibold text-gray-900 mb-4">{title}</h3>
+        {children}
+      </div>
+    </div>
+  )
+}
+
+// ── Person summary card ───────────────────────────────────────────────────────
+
+function PersonCard({
+  person,
+  itemShare,
+  taxShare,
+  tipShare,
+  tipPercent,
+  total,
+  items,
+  restaurantName,
+}: {
+  person: Person
+  itemShare: number
+  taxShare: number
+  tipShare: number
+  tipPercent: number
+  total: number
+  items: ReceiptItem[]
+  restaurantName: string | null
+}) {
+  const assignedItems = items
+    .filter(i => i.assignedTo.includes(person.id))
+    .map(i => ({
+      name: i.name,
+      price: i.price / i.assignedTo.length,
+      splits: i.assignedTo.length,
+    }))
+
+  const smsBody = buildSmsBody(
+    person,
+    assignedItems,
+    taxShare,
+    tipShare,
+    tipPercent,
+    total,
+    restaurantName,
+  )
+  const smsLink = person.phone
+    ? `sms:${person.phone}?body=${encodeURIComponent(smsBody)}`
+    : null
+
+  return (
+    <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+      {/* Person header */}
+      <div className="px-4 py-3 bg-gray-50 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <div className="w-8 h-8 rounded-full bg-emerald-500 flex items-center justify-center text-white text-sm font-bold">
+            {person.name.charAt(0).toUpperCase()}
+          </div>
+          <div>
+            <p className="font-semibold text-gray-900 text-sm">{person.name}</p>
+            {person.phone && <p className="text-xs text-gray-400">{person.phone}</p>}
+          </div>
+        </div>
+        {smsLink ? (
+          <a
+            href={smsLink}
+            className="bg-emerald-600 text-white text-xs font-semibold px-3 py-1.5 rounded-full"
+          >
+            Send Text
+          </a>
+        ) : (
+          <span className="text-xs text-gray-300">No phone #</span>
+        )}
+      </div>
+
+      {/* Table */}
+      <table className="w-full text-sm">
+        <tbody>
+          {assignedItems.map((item, i) => (
+            <tr key={i} className="border-t border-gray-50">
+              <td className="px-4 py-2 text-gray-700">
+                {item.name}
+                {item.splits > 1 && (
+                  <span className="text-gray-400 text-xs ml-1.5">(1/{item.splits})</span>
+                )}
+              </td>
+              <td className="px-4 py-2 text-right text-gray-900 font-medium whitespace-nowrap">
+                {fmt(item.price)}
+              </td>
+            </tr>
+          ))}
+          {assignedItems.length === 0 && (
+            <tr>
+              <td colSpan={2} className="px-4 py-3 text-gray-400 text-xs text-center border-t border-gray-50">
+                No items assigned
+              </td>
+            </tr>
+          )}
+          <tr className="border-t border-gray-100 bg-gray-50/60">
+            <td className="px-4 py-2 text-gray-400 text-xs">Tax</td>
+            <td className="px-4 py-2 text-right text-gray-400 text-xs">{fmt(taxShare)}</td>
+          </tr>
+          <tr className="border-t border-gray-50 bg-gray-50/60">
+            <td className="px-4 py-2 text-gray-400 text-xs">Tip ({tipPercent}%)</td>
+            <td className="px-4 py-2 text-right text-gray-400 text-xs">{fmt(tipShare)}</td>
+          </tr>
+          <tr className="border-t-2 border-gray-200">
+            <td className="px-4 py-3 font-bold text-gray-900">Total</td>
+            <td className="px-4 py-3 text-right font-bold text-emerald-600 text-base">
+              {fmt(total)}
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+// ── Main page ─────────────────────────────────────────────────────────────────
 
 type Tab = 'items' | 'summary'
 type Modal = 'addPerson' | 'saveGroup' | 'loadGroup' | null
@@ -298,12 +439,11 @@ export default function SplitPage() {
   const [receipt, setReceipt] = useState<Receipt | null>(null)
   const [items, setItems] = useState<ReceiptItem[]>([])
   const [people, setPeople] = useState<Person[]>([])
-  const [tip, setTip] = useState(0)
-  const [editingTip, setEditingTip] = useState(false)
-  const [tipInput, setTipInput] = useState('')
+  const [tipPercent, setTipPercent] = useState(18)
   const [tab, setTab] = useState<Tab>('items')
   const [modal, setModal] = useState<Modal>(null)
-  const [assigningItem, setAssigningItem] = useState<ReceiptItem | null>(null)
+  const [selectedIds, setSelectedIds] = useState<string[]>([])
+  const [assigning, setAssigning] = useState(false)
 
   useEffect(() => {
     const raw = sessionStorage.getItem('receipt')
@@ -311,12 +451,10 @@ export default function SplitPage() {
     const r: Receipt = JSON.parse(raw)
     setReceipt(r)
     setItems(r.items)
-    setTip(r.tip)
 
     const groupId = sessionStorage.getItem('preloadGroupId')
     if (groupId) {
-      const groups = getSavedGroups()
-      const g = groups.find(g => g.id === groupId)
+      const g = getSavedGroups().find(g => g.id === groupId)
       if (g) setPeople(g.people)
     }
   }, [router])
@@ -324,29 +462,28 @@ export default function SplitPage() {
   if (!receipt) return null
 
   const tax = receipt.tax
-  const totals = calcPersonTotals(items, people, tax, tip)
-  const unassignedItems = items.filter(i => i.assignedTo.length === 0)
+  const tip = Math.round(receipt.subtotal * tipPercent) / 100
+  const totals = calcPersonTotals(items, people, tax, tip, tipPercent)
+  const unassignedCount = items.filter(i => i.assignedTo.length === 0).length
 
-  const assignItem = (itemId: string, assignedTo: string[]) => {
-    setItems(prev => prev.map(i => i.id === itemId ? { ...i, assignedTo } : i))
-    setAssigningItem(null)
+  const toggleSelect = (id: string) =>
+    setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
+
+  const applyAssignment = (assignedTo: string[]) => {
+    setItems(prev =>
+      prev.map(item =>
+        selectedIds.includes(item.id) ? { ...item, assignedTo } : item,
+      ),
+    )
+    setSelectedIds([])
+    setAssigning(false)
   }
-
-  const addPerson = (person: Person) => setPeople(prev => [...prev, person])
 
   const removePerson = (id: string) => {
     setPeople(prev => prev.filter(p => p.id !== id))
     setItems(prev =>
-      prev.map(item => ({
-        ...item,
-        assignedTo: item.assignedTo.filter(pid => pid !== id),
-      }))
+      prev.map(item => ({ ...item, assignedTo: item.assignedTo.filter(pid => pid !== id) })),
     )
-  }
-
-  const handleSaveGroup = (name: string) => {
-    saveGroup({ id: uid(), name, people })
-    setModal(null)
   }
 
   const handleLoadGroup = (group: Group) => {
@@ -355,53 +492,66 @@ export default function SplitPage() {
       prev.map(item => ({
         ...item,
         assignedTo: item.assignedTo.filter(id => group.people.some(p => p.id === id)),
-      }))
+      })),
     )
     setModal(null)
   }
 
-  const commitTip = () => {
-    const val = parseFloat(tipInput)
-    if (!isNaN(val) && val >= 0) setTip(val)
-    setEditingTip(false)
-  }
-
   const grandTotal = totals.reduce((s, t) => s + t.total, 0)
-  const receiptTotal = receipt.subtotal + tax + tip
+
+  // For the assign sheet initial state: common assigned people across all selected items
+  const selectedItems = items.filter(i => selectedIds.includes(i.id))
+  const commonAssigned =
+    selectedItems.length === 1
+      ? selectedItems[0].assignedTo
+      : []
 
   return (
-    <div className="min-h-screen max-w-md mx-auto flex flex-col pb-20">
+    <div className="min-h-screen max-w-md mx-auto flex flex-col pb-24">
       {/* Header */}
       <div className="bg-emerald-600 px-5 pt-12 pb-4">
-        <div className="flex items-center gap-3 mb-3">
-          <button onClick={() => router.replace('/')} className="text-emerald-200 text-sm">
-            ← Back
-          </button>
-        </div>
+        <button onClick={() => router.replace('/')} className="text-emerald-200 text-sm mb-3 block">
+          ← Back
+        </button>
         <h1 className="text-xl font-bold text-white truncate">
           {receipt.restaurantName ?? 'Receipt'}
         </h1>
 
-        {/* Receipt totals row */}
-        <div className="mt-3 flex gap-3 text-sm">
+        <div className="mt-3 flex gap-2 text-sm">
           <div className="flex-1 bg-emerald-700/50 rounded-xl px-3 py-2">
             <p className="text-emerald-200 text-xs">Subtotal</p>
-            <p className="text-white font-semibold">{formatMoney(receipt.subtotal)}</p>
+            <p className="text-white font-semibold">{fmt(receipt.subtotal)}</p>
           </div>
           <div className="flex-1 bg-emerald-700/50 rounded-xl px-3 py-2">
             <p className="text-emerald-200 text-xs">Tax</p>
-            <p className="text-white font-semibold">{formatMoney(tax)}</p>
+            <p className="text-white font-semibold">{fmt(tax)}</p>
           </div>
-          <button
-            className="flex-1 bg-emerald-700/50 rounded-xl px-3 py-2 text-left"
-            onClick={() => { setTipInput(tip.toFixed(2)); setEditingTip(true) }}
-          >
-            <p className="text-emerald-200 text-xs">Tip ✏️</p>
-            <p className="text-white font-semibold">{formatMoney(tip)}</p>
-          </button>
           <div className="flex-1 bg-white/20 rounded-xl px-3 py-2">
             <p className="text-emerald-100 text-xs">Total</p>
-            <p className="text-white font-bold">{formatMoney(receiptTotal)}</p>
+            <p className="text-white font-bold">{fmt(receipt.subtotal + tax + tip)}</p>
+          </div>
+        </div>
+
+        {/* Tip row */}
+        <div className="mt-2 bg-emerald-700/50 rounded-xl px-3 py-2 flex items-center justify-between">
+          <div>
+            <p className="text-emerald-200 text-xs">Tip</p>
+            <p className="text-white font-semibold">{fmt(tip)}</p>
+          </div>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setTipPercent(p => Math.max(0, p - 1))}
+              className="w-8 h-8 rounded-full bg-emerald-600 text-white font-bold text-lg flex items-center justify-center active:bg-emerald-800"
+            >
+              −
+            </button>
+            <span className="text-white font-semibold text-sm w-10 text-center">{tipPercent}%</span>
+            <button
+              onClick={() => setTipPercent(p => p + 1)}
+              className="w-8 h-8 rounded-full bg-emerald-600 text-white font-bold text-lg flex items-center justify-center active:bg-emerald-800"
+            >
+              +
+            </button>
           </div>
         </div>
       </div>
@@ -424,10 +574,7 @@ export default function SplitPage() {
                 {person.name.charAt(0).toUpperCase()}
               </div>
               <span className="text-sm text-emerald-800 font-medium">{person.name}</span>
-              <button
-                onClick={() => removePerson(person.id)}
-                className="text-emerald-400 text-xs ml-0.5"
-              >
+              <button onClick={() => removePerson(person.id)} className="text-emerald-400 text-xs ml-0.5">
                 ×
               </button>
             </div>
@@ -456,153 +603,130 @@ export default function SplitPage() {
         {(['items', 'summary'] as Tab[]).map(t => (
           <button
             key={t}
-            onClick={() => setTab(t)}
+            onClick={() => { setTab(t); setSelectedIds([]) }}
             className={`flex-1 py-3 text-sm font-semibold capitalize transition-colors ${
-              tab === t
-                ? 'text-emerald-600 border-b-2 border-emerald-600'
-                : 'text-gray-400'
+              tab === t ? 'text-emerald-600 border-b-2 border-emerald-600' : 'text-gray-400'
             }`}
           >
             {t}
-            {t === 'items' && unassignedItems.length > 0 && (
+            {t === 'items' && unassignedCount > 0 && (
               <span className="ml-1.5 bg-orange-100 text-orange-600 text-xs rounded-full px-1.5 py-0.5">
-                {unassignedItems.length}
+                {unassignedCount}
               </span>
             )}
           </button>
         ))}
       </div>
 
-      {/* Content */}
-      {tab === 'items' ? (
+      {/* Items tab */}
+      {tab === 'items' && (
         <div className="flex-1 p-4 space-y-2">
           {people.length === 0 && (
             <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-amber-700">
-              Add people above, then tap items to assign them.
+              Add people above, then select items to assign them.
             </div>
           )}
+
+          {people.length > 0 && selectedIds.length === 0 && (
+            <p className="text-xs text-gray-400 text-center py-1">Tap items to select, then assign</p>
+          )}
+
           {items.map(item => {
+            const isSelected = selectedIds.includes(item.id)
             const assignedPeople = people.filter(p => item.assignedTo.includes(p.id))
-            const unassigned = item.assignedTo.length === 0
 
             return (
               <button
                 key={item.id}
-                onClick={() => setAssigningItem(item)}
-                className={`w-full bg-white rounded-xl border shadow-sm px-4 py-3 flex items-start gap-3 text-left active:scale-[0.99] transition-transform ${
-                  unassigned ? 'border-orange-200' : 'border-gray-100'
+                onClick={() => toggleSelect(item.id)}
+                className={`w-full bg-white rounded-xl border shadow-sm px-4 py-3 flex items-center gap-3 text-left active:scale-[0.99] transition-all ${
+                  isSelected
+                    ? 'border-emerald-400 bg-emerald-50 shadow-emerald-100'
+                    : item.assignedTo.length === 0
+                    ? 'border-orange-200'
+                    : 'border-gray-100'
                 }`}
               >
+                {/* Checkbox */}
+                <div
+                  className={`w-5 h-5 rounded border-2 flex items-center justify-center flex-shrink-0 ${
+                    isSelected ? 'bg-emerald-500 border-emerald-500' : 'border-gray-300'
+                  }`}
+                >
+                  {isSelected && <span className="text-white text-xs leading-none">✓</span>}
+                </div>
+
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium text-gray-900 truncate">{item.name}</p>
                   {assignedPeople.length > 0 && (
-                    <p className="text-xs text-emerald-600 mt-1">
+                    <p className="text-xs text-emerald-600 mt-0.5">
                       {assignedPeople.map(p => p.name).join(', ')}
-                      {assignedPeople.length > 1 && ` · ${formatMoney(item.price / assignedPeople.length)} each`}
+                      {assignedPeople.length > 1 &&
+                        ` · ${fmt(item.price / assignedPeople.length)} each`}
                     </p>
                   )}
-                  {unassigned && people.length > 0 && (
-                    <p className="text-xs text-orange-400 mt-1">Tap to assign</p>
+                  {item.assignedTo.length === 0 && people.length > 0 && (
+                    <p className="text-xs text-orange-400 mt-0.5">Unassigned</p>
                   )}
                 </div>
-                <p className="text-sm font-semibold text-gray-900 flex-shrink-0">
-                  {formatMoney(item.price)}
-                </p>
+                <p className="text-sm font-semibold text-gray-900 flex-shrink-0">{fmt(item.price)}</p>
               </button>
             )
           })}
         </div>
-      ) : (
+      )}
+
+      {/* Summary tab */}
+      {tab === 'summary' && (
         <div className="flex-1 p-4 space-y-3">
           {people.length === 0 ? (
-            <p className="text-center text-gray-400 text-sm py-8">
-              Add people to see the breakdown
-            </p>
+            <p className="text-center text-gray-400 text-sm py-8">Add people to see the breakdown</p>
           ) : (
             <>
-              {totals.map(({ person, itemShare, total }) => (
-                <div key={person.id} className="bg-white rounded-xl border border-gray-100 shadow-sm px-4 py-4">
-                  <div className="flex items-center justify-between mb-2">
-                    <div className="flex items-center gap-2">
-                      <div className="w-8 h-8 rounded-full bg-emerald-500 flex items-center justify-center text-white text-sm font-bold">
-                        {person.name.charAt(0).toUpperCase()}
-                      </div>
-                      <div>
-                        <p className="font-semibold text-gray-900 text-sm">{person.name}</p>
-                        {person.phone && (
-                          <p className="text-xs text-gray-400">{person.phone}</p>
-                        )}
-                      </div>
-                    </div>
-                    <p className="text-xl font-bold text-emerald-600">{formatMoney(total)}</p>
-                  </div>
-                  <div className="text-xs text-gray-400 space-y-0.5 pt-2 border-t border-gray-50">
-                    <div className="flex justify-between">
-                      <span>Items</span>
-                      <span>{formatMoney(itemShare)}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span>Tax + tip share</span>
-                      <span>{formatMoney(total - itemShare)}</span>
-                    </div>
-                  </div>
-                  {/* Items assigned */}
-                  <div className="mt-2 flex flex-wrap gap-1">
-                    {items
-                      .filter(i => i.assignedTo.includes(person.id))
-                      .map(i => (
-                        <span
-                          key={i.id}
-                          className="text-xs bg-gray-50 border border-gray-100 rounded-full px-2 py-0.5 text-gray-500 truncate max-w-[140px]"
-                        >
-                          {i.name}
-                        </span>
-                      ))}
-                  </div>
-                </div>
+              {totals.map(({ person, itemShare, taxShare, tipShare, total }) => (
+                <PersonCard
+                  key={person.id}
+                  person={person}
+                  itemShare={itemShare}
+                  taxShare={taxShare}
+                  tipShare={tipShare}
+                  tipPercent={tipPercent}
+                  total={total}
+                  items={items}
+                  restaurantName={receipt.restaurantName}
+                />
               ))}
 
-              {unassignedItems.length > 0 && (
+              {unassignedCount > 0 && (
                 <div className="bg-orange-50 border border-orange-200 rounded-xl px-4 py-3 text-sm text-orange-700">
-                  {unassignedItems.length} item{unassignedItems.length > 1 ? 's' : ''} not yet assigned
+                  {unassignedCount} item{unassignedCount > 1 ? 's' : ''} not yet assigned — totals may be incomplete
                 </div>
               )}
 
               <div className="bg-gray-100 rounded-xl px-4 py-3 flex justify-between text-sm font-semibold text-gray-700">
                 <span>Total split</span>
-                <span>{formatMoney(grandTotal)}</span>
+                <span>{fmt(grandTotal)}</span>
               </div>
             </>
           )}
         </div>
       )}
 
-      {/* Tip editing overlay */}
-      {editingTip && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-black/40" onClick={() => setEditingTip(false)}>
-          <div
-            className="bg-white rounded-2xl p-5 w-full max-w-xs"
-            onClick={e => e.stopPropagation()}
-          >
-            <h3 className="font-semibold text-gray-900 mb-3">Edit Tip</h3>
-            <div className="relative mb-4">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">$</span>
-              <input
-                type="number"
-                min="0"
-                step="0.01"
-                value={tipInput}
-                onChange={e => setTipInput(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && commitTip()}
-                autoFocus
-                className="w-full border border-gray-200 rounded-xl pl-7 pr-4 py-3 text-sm outline-none focus:border-emerald-400"
-              />
-            </div>
+      {/* Floating assign bar */}
+      {selectedIds.length > 0 && (
+        <div className="fixed bottom-0 inset-x-0 max-w-md mx-auto p-4 bg-white border-t border-gray-100 shadow-lg z-40">
+          <div className="flex gap-3">
             <button
-              onClick={commitTip}
-              className="w-full bg-emerald-600 text-white rounded-xl py-3 font-semibold"
+              onClick={() => setSelectedIds([])}
+              className="px-4 py-3 border border-gray-200 rounded-2xl text-sm text-gray-500 font-medium"
             >
-              Done
+              Cancel
+            </button>
+            <button
+              onClick={() => setAssigning(true)}
+              className="flex-1 bg-emerald-600 text-white rounded-2xl py-3 font-semibold text-sm"
+            >
+              Assign {selectedIds.length} item{selectedIds.length > 1 ? 's' : ''} →
             </button>
           </div>
         </div>
@@ -610,20 +734,28 @@ export default function SplitPage() {
 
       {/* Modals */}
       {modal === 'addPerson' && (
-        <AddPersonModal onAdd={addPerson} onClose={() => setModal(null)} />
+        <AddPersonModal
+          onAdd={p => setPeople(prev => [...prev, p])}
+          onClose={() => setModal(null)}
+        />
       )}
       {modal === 'saveGroup' && (
-        <SaveGroupModal people={people} onSave={handleSaveGroup} onClose={() => setModal(null)} />
+        <SaveGroupModal
+          people={people}
+          onSave={name => { saveGroup({ id: uid(), name, people }); setModal(null) }}
+          onClose={() => setModal(null)}
+        />
       )}
       {modal === 'loadGroup' && (
         <LoadGroupModal onLoad={handleLoadGroup} onClose={() => setModal(null)} />
       )}
-      {assigningItem && (
+      {assigning && (
         <AssignSheet
-          item={assigningItem}
+          itemCount={selectedIds.length}
+          initialAssigned={commonAssigned}
           people={people}
-          onDone={assigned => assignItem(assigningItem.id, assigned)}
-          onClose={() => setAssigningItem(null)}
+          onDone={applyAssignment}
+          onClose={() => setAssigning(false)}
         />
       )}
     </div>
