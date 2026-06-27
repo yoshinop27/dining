@@ -256,37 +256,134 @@ function SaveGroupModal({
 
 // ── Load Group modal ──────────────────────────────────────────────────────────
 
-function LoadGroupModal({ onLoad, onClose }: { onLoad: (g: Group) => void; onClose: () => void }) {
+function LoadGroupModal({
+  currentPeopleIds,
+  onAdd,
+  onClose,
+}: {
+  currentPeopleIds: string[]
+  onAdd: (people: Person[]) => void
+  onClose: () => void
+}) {
   const groups = getSavedGroups()
+  const [selectedIds, setSelectedIds] = useState<string[]>([])
+  const [expandedGroupId, setExpandedGroupId] = useState<string | null>(
+    groups.length === 1 ? groups[0].id : null,
+  )
+
+  const allPeople = groups.flatMap(g => g.people)
+
+  const toggle = (personId: string) =>
+    setSelectedIds(prev =>
+      prev.includes(personId) ? prev.filter(x => x !== personId) : [...prev, personId],
+    )
+
+  const toggleGroup = (group: Group) => {
+    const ids = group.people.map(p => p.id)
+    const allOn = ids.every(id => selectedIds.includes(id))
+    setSelectedIds(prev =>
+      allOn ? prev.filter(id => !ids.includes(id)) : [...new Set([...prev, ...ids])],
+    )
+  }
+
+  const handleAdd = () => {
+    const toAdd = allPeople.filter(p => selectedIds.includes(p.id))
+    onAdd(toAdd)
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col justify-end" onClick={onClose}>
       <div className="absolute inset-0 bg-black/40" />
       <div
-        className="relative bg-white rounded-t-3xl max-h-[70vh] flex flex-col"
+        className="relative bg-white rounded-t-3xl max-h-[80vh] flex flex-col"
         onClick={e => e.stopPropagation()}
       >
         <div className="px-5 pt-5 pb-3 border-b border-gray-100">
           <div className="w-10 h-1 bg-gray-200 rounded-full mx-auto mb-4" />
-          <h3 className="font-semibold text-gray-900">Load a Group</h3>
+          <h3 className="font-semibold text-gray-900">Add from saved groups</h3>
+          <p className="text-xs text-gray-400 mt-0.5">Pick anyone from any group</p>
         </div>
+
         <div className="flex-1 overflow-y-auto">
           {groups.length === 0 ? (
             <p className="text-center text-gray-400 text-sm py-8">No saved groups yet</p>
           ) : (
-            groups.map(group => (
-              <button
-                key={group.id}
-                className="w-full px-5 py-4 flex flex-col text-left border-b border-gray-50 active:bg-gray-50"
-                onClick={() => onLoad(group)}
-              >
-                <span className="font-medium text-gray-900 text-sm">{group.name}</span>
-                <span className="text-xs text-gray-400 mt-0.5">
-                  {group.people.map(p => p.name).join(', ')}
-                </span>
-              </button>
-            ))
+            groups.map(group => {
+              const isExpanded = expandedGroupId === group.id
+              const groupSelectedCount = group.people.filter(p => selectedIds.includes(p.id)).length
+              const allGroupSelected = groupSelectedCount === group.people.length
+
+              return (
+                <div key={group.id} className="border-b border-gray-50">
+                  {/* Group header row */}
+                  <div className="flex items-center px-5 py-3">
+                    <button
+                      className="flex-1 flex items-center gap-3 text-left"
+                      onClick={() => setExpandedGroupId(isExpanded ? null : group.id)}
+                    >
+                      <span className="text-gray-400 text-xs w-3">{isExpanded ? '▾' : '▸'}</span>
+                      <div>
+                        <p className="font-medium text-gray-900 text-sm">{group.name}</p>
+                        <p className="text-xs text-gray-400">
+                          {group.people.map(p => p.name).join(', ')}
+                        </p>
+                      </div>
+                    </button>
+                    <button
+                      onClick={() => toggleGroup(group)}
+                      className={`text-xs font-medium px-3 py-1.5 rounded-full border transition-colors ${
+                        allGroupSelected
+                          ? 'bg-emerald-500 border-emerald-500 text-white'
+                          : groupSelectedCount > 0
+                          ? 'bg-emerald-50 border-emerald-300 text-emerald-700'
+                          : 'border-gray-200 text-gray-500'
+                      }`}
+                    >
+                      {allGroupSelected ? 'All added' : groupSelectedCount > 0 ? `${groupSelectedCount} added` : 'Add all'}
+                    </button>
+                  </div>
+
+                  {/* Expanded people list */}
+                  {isExpanded && (
+                    <div className="bg-gray-50/50">
+                      {group.people.map(person => {
+                        const isOn = selectedIds.includes(person.id)
+                        const alreadyPresent = currentPeopleIds.includes(person.id)
+                        return (
+                          <button
+                            key={person.id}
+                            onClick={() => !alreadyPresent && toggle(person.id)}
+                            disabled={alreadyPresent}
+                            className="w-full px-5 py-3 flex items-center gap-3 border-t border-gray-100 active:bg-gray-100 disabled:opacity-40"
+                          >
+                            <Avatar name={person.name} />
+                            <div className="flex-1 text-left">
+                              <p className="text-sm font-medium text-gray-900">{person.name}</p>
+                              {person.phone && <p className="text-xs text-gray-400">{person.phone}</p>}
+                              {alreadyPresent && <p className="text-xs text-emerald-500">Already added</p>}
+                            </div>
+                            {!alreadyPresent && <Checkbox checked={isOn} />}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+              )
+            })
           )}
+        </div>
+
+        <div className="p-4 border-t border-gray-100">
+          <button
+            onClick={handleAdd}
+            disabled={selectedIds.length === 0}
+            className="w-full bg-emerald-600 text-white rounded-2xl py-4 font-semibold disabled:opacity-40"
+          >
+            {selectedIds.length === 0
+              ? 'Select people to add'
+              : `Add ${selectedIds.length} person${selectedIds.length > 1 ? 's' : ''}`}
+          </button>
         </div>
       </div>
     </div>
@@ -489,14 +586,11 @@ export default function SplitPage() {
     )
   }
 
-  const handleLoadGroup = (group: Group) => {
-    setPeople(group.people)
-    setItems(prev =>
-      prev.map(item => ({
-        ...item,
-        assignedTo: item.assignedTo.filter(id => group.people.some(p => p.id === id)),
-      })),
-    )
+  const handleAddFromGroups = (newPeople: Person[]) => {
+    setPeople(prev => {
+      const existingIds = new Set(prev.map(p => p.id))
+      return [...prev, ...newPeople.filter(p => !existingIds.has(p.id))]
+    })
     setModal(null)
   }
 
@@ -750,7 +844,11 @@ export default function SplitPage() {
         />
       )}
       {modal === 'loadGroup' && (
-        <LoadGroupModal onLoad={handleLoadGroup} onClose={() => setModal(null)} />
+        <LoadGroupModal
+          currentPeopleIds={people.map(p => p.id)}
+          onAdd={handleAddFromGroups}
+          onClose={() => setModal(null)}
+        />
       )}
       {assigning && (
         <AssignSheet
