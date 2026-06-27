@@ -1,36 +1,78 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Split the Bill
 
-## Getting Started
+A mobile-first web app for splitting restaurant receipts. Take a photo, assign items to people, and see exactly what everyone owes.
 
-First, run the development server:
+## Architecture
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+```
+┌─────────────────────────────────────────────────────┐
+│                   Browser (Mobile)                   │
+│                                                      │
+│  /  (Home)                /split (Split UI)          │
+│  ┌──────────────┐         ┌──────────────────────┐   │
+│  │ Camera/Upload│         │ People strip         │   │
+│  │ Saved groups │  ─────▶ │ Items tab            │   │
+│  └──────────────┘         │ Summary tab          │   │
+│                           └──────────────────────┘   │
+│                                                      │
+│  sessionStorage: receipt JSON (page-to-page)         │
+│  localStorage:  saved groups (name + phone list)     │
+└─────────────────────┬───────────────────────────────┘
+                      │ POST /api/parse-receipt
+                      ▼
+┌─────────────────────────────────────────────────────┐
+│               Next.js API Route (server)             │
+│                                                      │
+│  Receives image → base64 encodes → calls Claude      │
+└─────────────────────┬───────────────────────────────┘
+                      │ Anthropic SDK
+                      ▼
+┌─────────────────────────────────────────────────────┐
+│            Claude claude-opus-4-8 (Vision)           │
+│                                                      │
+│  Extracts: restaurant name, line items (name+price), │
+│  subtotal, tax, tip, total                           │
+└─────────────────────────────────────────────────────┘
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Stack
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+| Layer | Tech |
+|---|---|
+| Framework | Next.js 16 (App Router) |
+| Styling | Tailwind CSS |
+| Receipt parsing | Claude claude-opus-4-8 via Anthropic SDK |
+| Persistence | localStorage (saved groups only — sessions are stateless) |
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Data flow
 
-## Learn More
+1. User takes/uploads a photo on the home screen
+2. Image is `POST`ed to `/api/parse-receipt` as `multipart/form-data`
+3. Server base64-encodes the image and sends it to Claude Vision
+4. Claude returns structured JSON: `{ restaurantName, items[], subtotal, tax, tip, total }`
+5. Receipt is stored in `sessionStorage` and the user is navigated to `/split`
+6. On `/split`, users add people (name + phone), then tap each item to assign it to one or more people
+7. Tax and tip are prorated proportionally to each person's share of the assigned subtotal
+8. The Summary tab shows each person's total owed and itemized breakdown
 
-To learn more about Next.js, take a look at the following resources:
+## Splitting logic
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```
+personShare = sum(item.price / item.assignedTo.length)  for each assigned item
+fraction    = personShare / totalAssignedSubtotal
+personTotal = personShare + fraction * (tax + tip)
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Items split between multiple people are divided evenly. Tax and tip are prorated by food share.
 
-## Deploy on Vercel
+## Setup
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+```bash
+git clone <repo>
+cd dining
+npm install
+cp .env.local.example .env.local   # add your ANTHROPIC_API_KEY
+npm run dev
+```
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Get an API key at [console.anthropic.com](https://console.anthropic.com).
