@@ -51,8 +51,15 @@ Only include food/drink line items, not subtotal/tax/tip/total rows. Prices are 
   data.items = (data.items ?? []).map((item: Record<string, unknown>, i: number) => ({
     ...item,
     id: item.id ?? String(i + 1),
+    price: Number(item.price) || 0,
     assignedTo: [],
   }))
+
+  const itemsSum = data.items.reduce((s: number, i: Record<string, unknown>) => s + (Number(i.price) || 0), 0)
+  data.subtotal = Number(data.subtotal) || itemsSum
+  data.tax = Number(data.tax) || 0
+  data.tip = Number(data.tip) || 0
+  data.total = Number(data.total) || (data.subtotal + data.tax + data.tip)
 
   return Response.json(data)
 }

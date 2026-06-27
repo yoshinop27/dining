@@ -9,8 +9,9 @@ function uid() {
   return Math.random().toString(36).slice(2, 9)
 }
 
-function fmt(n: number) {
-  return '$' + n.toFixed(2)
+function fmt(n: number | null | undefined) {
+  const v = Number(n)
+  return '$' + (Number.isFinite(v) ? v : 0).toFixed(2)
 }
 
 function calcPersonTotals(
@@ -18,7 +19,6 @@ function calcPersonTotals(
   people: Person[],
   tax: number,
   tip: number,
-  tipPercent: number,
 ) {
   const assignedSubtotal = items.reduce(
     (sum, item) => (item.assignedTo.length > 0 ? sum + item.price : sum),
@@ -33,7 +33,7 @@ function calcPersonTotals(
     const fraction = assignedSubtotal > 0 ? itemShare / assignedSubtotal : 0
     const taxShare = fraction * tax
     const tipShare = fraction * tip
-    return { person, itemShare, taxShare, tipShare, tipPercent, total: itemShare + taxShare + tipShare }
+    return { person, itemShare, taxShare, tipShare, total: itemShare + taxShare + tipShare }
   })
 }
 
@@ -444,6 +444,7 @@ export default function SplitPage() {
   const [modal, setModal] = useState<Modal>(null)
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [assigning, setAssigning] = useState(false)
+  const [hasSavedGroups, setHasSavedGroups] = useState(false)
 
   useEffect(() => {
     const raw = sessionStorage.getItem('receipt')
@@ -451,6 +452,8 @@ export default function SplitPage() {
     const r: Receipt = JSON.parse(raw)
     setReceipt(r)
     setItems(r.items)
+
+    setHasSavedGroups(getSavedGroups().length > 0)
 
     const groupId = sessionStorage.getItem('preloadGroupId')
     if (groupId) {
@@ -463,7 +466,7 @@ export default function SplitPage() {
 
   const tax = receipt.tax
   const tip = Math.round(receipt.subtotal * tipPercent) / 100
-  const totals = calcPersonTotals(items, people, tax, tip, tipPercent)
+  const totals = calcPersonTotals(items, people, tax, tip)
   const unassignedCount = items.filter(i => i.assignedTo.length === 0).length
 
   const toggleSelect = (id: string) =>
@@ -587,7 +590,7 @@ export default function SplitPage() {
               Save group
             </button>
           )}
-          {getSavedGroups().length > 0 && (
+          {hasSavedGroups && (
             <button
               onClick={() => setModal('loadGroup')}
               className="flex-shrink-0 text-xs text-gray-400 px-2 py-1 border border-dashed border-gray-200 rounded-full whitespace-nowrap"
@@ -742,7 +745,7 @@ export default function SplitPage() {
       {modal === 'saveGroup' && (
         <SaveGroupModal
           people={people}
-          onSave={name => { saveGroup({ id: uid(), name, people }); setModal(null) }}
+          onSave={name => { saveGroup({ id: uid(), name, people }); setHasSavedGroups(true); setModal(null) }}
           onClose={() => setModal(null)}
         />
       )}
